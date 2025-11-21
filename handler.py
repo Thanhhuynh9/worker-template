@@ -1,31 +1,57 @@
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import StreamingResponse
-from totalsegmentator.server import TotalSegmentatorServer
-import tempfile
+import runpod
 import os
-import shutil
+import uuid
+import subprocess
 from pathlib import Path
+import requests
+from runpod.serverless.utils import rp_upload
 
-app = FastAPI()
+def download_file(url, dst):
+    r = requests.get(url, stream=True)
+    with open(dst, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+    return dst
 
-seg = TotalSegmentatorServer(device="cuda", fast=True, rope=True, ml=True)
+def handler(event):
+    """
+    Run TotalSegmentator using the CLI from inside RunPod Serverless.
+    """
+    input_url = event["input"].get("input_url")
+    task = event["input"].get("task", "total")
 
-@app.post("/segment")
-async def segment(file: UploadFile = File(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".nii.gz") as tmp:
-        content = await file.read()
-        tmp.write(content)
-        input_path = tmp.name
+    # Create workspace paths
+    input_path = f"/workspace/{uuid.uuid4()}.nii.gz"
+    output_dir = f"/workspace/output_{uuid.uuid4()}"
+    os.makedirs(output_dir, exist_ok=True)
 
-    out_dir = tempfile.mkdtemp()
+    # 1. Download input file
+    download_file(input_url, input_path)
+
+    # 2. Run TotalSegmentator using CLI
+    cmd = [
+        "TotalSegmentator",
+        "-i", input_path,
+        "-o", output_dir,
+        "--task", task,
+        "--fast"
+    ]
+
     try:
-        seg.segment(input_path, out_dir, task="total")
-        result_path = next(Path(out_dir).glob("*.nii.gz"))
-        return StreamingResponse(
-            open(result_path, "rb"),
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": "attachment; filename=segmentation.nii.gz"}
-        )
-    finally:
-        os.unlink(input_path)
-        shutil.rmtree(out_dir, ignore_errors=True)
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        return {"error": str(e)}
+
+    # 3. Upload all output masks
+    output_files = []
+    for f in Path(output_dir).glob("*.nii.gz"):
+        url = rp_upload(str(f), f.name)
+        output_files.append({"file": f.name, "url": url})
+
+    return {
+        "status": "completed",
+        "task": task,
+        "results": output_files
+    }
+
+runpod.serverless.start({"handler": handler})
