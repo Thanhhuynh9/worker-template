@@ -1,15 +1,22 @@
-FROM runpod/base:0.6.3-cuda11.8.0
+FROM runpod/serverless:gpu-cuda12.1
 
-# Set python3.11 as the default python
-RUN ln -sf $(which python3.11) /usr/local/bin/python && \
-    ln -sf $(which python3.11) /usr/local/bin/python3
+# Install system dependencies for medical libraries
+RUN apt update && apt install -y \
+    python3 python3-pip \
+    libgl1 libglib2.0-0 libnvinfer-dev libnvinfer-plugin-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Copy dependency list
 COPY requirements.txt /requirements.txt
-RUN uv pip install --upgrade -r /requirements.txt --no-cache-dir --system
 
-# Add files
-ADD handler.py .
+# Install Python packages
+RUN pip install --no-cache-dir -r /requirements.txt
 
-# Run the handler
-CMD python -u /handler.py
+# Create workspace
+RUN mkdir -p /workspace
+COPY handler.py /handler.py
+
+CMD ["python3", "/handler.py"]
