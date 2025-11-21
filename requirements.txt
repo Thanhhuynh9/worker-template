@@ -1,3 +1,7 @@
-TotalSegmentator[all]==2.3.1
-uvicorn[standard]
-python-multipart
+TotalSegmentator
+nibabel
+SimpleITK
+pydicom
+numpy
+requests
+runpod
